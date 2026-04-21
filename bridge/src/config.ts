@@ -3,14 +3,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface BridgeConfig {
+  environment: "development" | "test" | "production";
   port: number;
   relayBaseUrl: string;
   bridgeStoreDriver: "memory" | "postgres";
   databaseUrl: string;
   databaseSchema: string;
   databaseAutoMigrate: boolean;
+  startupRequireReady: boolean;
   adminApiToken: string;
-  accessTokenSecret: string;
+  tokenHashSecret: string;
+  accessTokenPrivateKey: string;
+  accessTokenPublicKey: string;
   accessTokenIssuer: string;
   accessTokenAudience: string;
   openclawBaseUrl: string;
@@ -21,6 +25,7 @@ export interface BridgeConfig {
   openclawHealthCheck: boolean;
   pairingCodeTtlMs: number;
   bootstrapTokenTtlMs: number;
+  pairingCodeMaxAttempts: number;
   accessTokenTtlMs: number;
   refreshTokenSlidingTtlMs: number;
   refreshTokenAbsoluteTtlMs: number;
@@ -30,10 +35,13 @@ export interface BridgeConfig {
   relayHeartbeatIntervalMs: number;
   relayPongTimeoutMs: number;
   relayStaleMissCount: number;
+  cleanupIntervalMs: number;
+  promptResultRetentionMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   const runtimeEnv = env === process.env ? resolveRuntimeEnv(env) : env;
+  const environment = readEnvironment(runtimeEnv.NODE_ENV);
   const port = readInt(runtimeEnv.PORT, 8787);
   const databaseUrl = runtimeEnv.DATABASE_URL?.trim() || "";
   const bridgeStoreDriver = readStoreDriver(runtimeEnv.BRIDGE_STORE_DRIVER, databaseUrl ? "postgres" : "memory");
@@ -43,14 +51,30 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
   }
 
   return {
+    environment,
     port,
     relayBaseUrl: normalizePublicBaseUrl(runtimeEnv.RELAY_BASE_URL?.trim() || `http://127.0.0.1:${port}`),
     bridgeStoreDriver,
     databaseUrl,
     databaseSchema: runtimeEnv.DATABASE_SCHEMA?.trim() || "openclaw_bridge",
     databaseAutoMigrate: readBool(runtimeEnv.DATABASE_AUTO_MIGRATE, bridgeStoreDriver === "postgres"),
+    startupRequireReady: readBool(
+      runtimeEnv.STARTUP_REQUIRE_READY,
+      environment === "production" || bridgeStoreDriver === "postgres"
+    ),
     adminApiToken: readRequired(runtimeEnv.ADMIN_API_TOKEN, "ADMIN_API_TOKEN"),
-    accessTokenSecret: readRequired(runtimeEnv.ACCESS_TOKEN_SECRET, "ACCESS_TOKEN_SECRET"),
+    tokenHashSecret: readRequired(
+      runtimeEnv.TOKEN_HASH_SECRET?.trim() || runtimeEnv.ACCESS_TOKEN_SECRET?.trim(),
+      "TOKEN_HASH_SECRET"
+    ),
+    accessTokenPrivateKey: readRequired(
+      normalizePem(runtimeEnv.ACCESS_TOKEN_PRIVATE_KEY),
+      "ACCESS_TOKEN_PRIVATE_KEY"
+    ),
+    accessTokenPublicKey: readRequired(
+      normalizePem(runtimeEnv.ACCESS_TOKEN_PUBLIC_KEY),
+      "ACCESS_TOKEN_PUBLIC_KEY"
+    ),
     accessTokenIssuer: runtimeEnv.ACCESS_TOKEN_ISSUER?.trim() || "openclaw-mobile-companion",
     accessTokenAudience: runtimeEnv.ACCESS_TOKEN_AUDIENCE?.trim() || "openclaw-mobile",
     openclawBaseUrl: normalizeBaseUrl(readRequired(runtimeEnv.OPENCLAW_BASE_URL, "OPENCLAW_BASE_URL")),
@@ -61,6 +85,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     openclawHealthCheck: readBool(runtimeEnv.OPENCLAW_HEALTH_CHECK, true),
     pairingCodeTtlMs: readInt(runtimeEnv.PAIRING_CODE_TTL_MS, 10 * 60 * 1000),
     bootstrapTokenTtlMs: readInt(runtimeEnv.BOOTSTRAP_TOKEN_TTL_MS, 60 * 1000),
+    pairingCodeMaxAttempts: readInt(runtimeEnv.PAIRING_CODE_MAX_ATTEMPTS, 10),
     accessTokenTtlMs: readInt(runtimeEnv.ACCESS_TOKEN_TTL_MS, 5 * 60 * 1000),
     refreshTokenSlidingTtlMs: readInt(runtimeEnv.REFRESH_TOKEN_SLIDING_TTL_MS, 30 * 24 * 60 * 60 * 1000),
     refreshTokenAbsoluteTtlMs: readInt(runtimeEnv.REFRESH_TOKEN_ABSOLUTE_TTL_MS, 90 * 24 * 60 * 60 * 1000),
@@ -75,7 +100,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): BridgeConfig {
     wsTicketTtlMs: readInt(runtimeEnv.WS_TICKET_TTL_MS, 30 * 1000),
     relayHeartbeatIntervalMs: readInt(runtimeEnv.RELAY_HEARTBEAT_INTERVAL_MS, 25 * 1000),
     relayPongTimeoutMs: readInt(runtimeEnv.RELAY_PONG_TIMEOUT_MS, 10 * 1000),
-    relayStaleMissCount: readInt(runtimeEnv.RELAY_STALE_MISS_COUNT, 2)
+    relayStaleMissCount: readInt(runtimeEnv.RELAY_STALE_MISS_COUNT, 2),
+    cleanupIntervalMs: readInt(runtimeEnv.CLEANUP_INTERVAL_MS, 60 * 1000),
+    promptResultRetentionMs: readInt(runtimeEnv.PROMPT_RESULT_RETENTION_MS, 24 * 60 * 60 * 1000)
   };
 }
 
@@ -125,6 +152,15 @@ function readStoreDriver(value: string | undefined, fallback: "memory" | "postgr
   return fallback;
 }
 
+function readEnvironment(value: string | undefined): "development" | "test" | "production" {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === "production" || normalized === "test") {
+    return normalized;
+  }
+
+  return "development";
+}
+
 function normalizeBaseUrl(value: string): string {
   const normalizedScheme = value
     .trim()
@@ -136,6 +172,14 @@ function normalizeBaseUrl(value: string): string {
 
 function normalizePublicBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
+}
+
+function normalizePem(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  return value.trim().replace(/\\n/g, "\n");
 }
 
 function defaultEnvFileCandidates(): string[] {

@@ -40,6 +40,7 @@ export async function runPairingCli(argv: string[] = process.argv.slice(2)): Pro
 export function formatPairingSessionOutput(session: Record<string, unknown>): string {
   return [
     "OpenClaw pairing session created.",
+    `Pairing session ID: ${String(session.pairing_session_id ?? "")}`,
     `Pairing code: ${String(session.pairing_code ?? "")}`,
     `Expires at: ${String(session.expires_at ?? "")}`,
     `Relay URL: ${String(session.relay_base_url ?? "")}`,

@@ -10,6 +10,7 @@ import type { BridgeConfig } from "./config.js";
 import { loadConfig } from "./config.js";
 import { ApiError, isApiError } from "./errors.js";
 import { createId } from "./ids.js";
+import { logBridgeEvent } from "./logger.js";
 import {
   G2_HUD_SYSTEM_PROMPT,
   OpenClawClient,
@@ -65,8 +66,15 @@ export interface BridgeRuntime {
   rateLimiter: InMemoryRateLimiter;
 }
 
+interface BridgeContextVariables {
+  Variables: {
+    requestId: string;
+    deviceId?: string;
+  };
+}
+
 export interface StartedBridgeServer {
-  app: Hono;
+  app: Hono<BridgeContextVariables>;
   config: BridgeConfig;
   runtime: BridgeRuntime;
   server: HttpServer;
@@ -97,13 +105,13 @@ export async function createConfiguredBridgeRuntime(
   return createBridgeRuntime(config, openclaw, store);
 }
 
-export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): Hono {
+export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): Hono<BridgeContextVariables> {
   if (!runtime && config.bridgeStoreDriver === "postgres") {
     throw new Error("Postgres bridge runtime must be created with createConfiguredBridgeRuntime(config).");
   }
 
   const resolvedRuntime = runtime ?? createBridgeRuntime(config);
-  const app = new Hono();
+  const app = new Hono<BridgeContextVariables>();
 
   app.use(
     "*",
@@ -114,6 +122,27 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
       maxAge: 600
     })
   );
+
+  app.use("*", async (c, next) => {
+    const requestId = c.req.header("x-request-id")?.trim() || createId("req");
+    const startedAtMs = Date.now();
+
+    c.set("requestId", requestId);
+
+    await next();
+
+    c.header("x-request-id", requestId);
+    logBridgeEvent({
+      event: "http_request",
+      requestId,
+      method: c.req.method,
+      path: c.req.path,
+      status: c.res.status,
+      elapsedMs: Date.now() - startedAtMs,
+      remoteIp: clientIp(c),
+      deviceId: c.get("deviceId")
+    });
+  });
 
   if (config.g2BridgeToken) {
     app.use("/health", requireBearerToken(config.g2BridgeToken));
@@ -185,13 +214,20 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
     });
   });
 
+  app.get("/v1/ready", async (c) => {
+    const gateway = await resolvedRuntime.openclaw.checkHealth();
+    const readiness = await resolvedRuntime.services.checkReadiness(isGatewayHealthy(gateway));
+    return c.json(readiness, readiness.ready ? 200 : 503);
+  });
+
   app.post("/v1/turn", async (c) => {
-    let requestId = createId("req");
+    let requestId = c.get("requestId");
 
     try {
       enforceRateLimit(c, resolvedRuntime.rateLimiter, "turn", 30, 60_000);
       const accessToken = requireAuthorizationBearer(c);
       const verified = await resolvedRuntime.services.verifyAccessToken(accessToken, ["turn:send"]);
+      c.set("deviceId", verified.deviceId);
       const body = await readJsonBody(c.req.raw);
       const validated = validateV1TurnBody(body);
 
@@ -278,7 +314,8 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
       enforceRateLimit(c, resolvedRuntime.rateLimiter, "pairing", 5, 60_000);
       const body = await readJsonBody(c.req.raw);
       const pairingCode = typeof body?.pairing_code === "string" ? body.pairing_code : "";
-      const redeemed = await resolvedRuntime.services.redeemPairingCode(pairingCode);
+      const pairingSessionId = typeof body?.pairing_session_id === "string" ? body.pairing_session_id : undefined;
+      const redeemed = await resolvedRuntime.services.redeemPairingCode(pairingCode, pairingSessionId);
       return c.json(redeemed, 200);
     } catch (error) {
       return handleError(c, error);
@@ -298,6 +335,7 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
         clientType: readClientType(bodyObject.client_type),
         remoteIp: clientIp(c)
       });
+      c.set("deviceId", result.device_id);
       return c.json(result, 201);
     } catch (error) {
       return handleError(c, error);
@@ -321,6 +359,7 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
         refreshToken,
         remoteIp: clientIp(c)
       });
+      c.set("deviceId", deviceId);
       return c.json(result, 200);
     } catch (error) {
       return handleError(c, error);
@@ -337,6 +376,8 @@ export function createBridgeApp(config: BridgeConfig, runtime?: BridgeRuntime): 
         accessToken,
         conversationId: typeof bodyObject.conversation_id === "string" ? bodyObject.conversation_id : undefined
       });
+      const verified = await resolvedRuntime.services.verifyAccessToken(accessToken, ["relay:connect"]);
+      c.set("deviceId", verified.deviceId);
       return c.json(result, 201);
     } catch (error) {
       return handleError(c, error);
@@ -378,6 +419,24 @@ export async function startBridgeServer(
   options: { port?: number } = {}
 ): Promise<StartedBridgeServer> {
   const resolvedRuntime = runtime ?? (await createConfiguredBridgeRuntime(config));
+  const cleanupTimer = setInterval(() => {
+    void resolvedRuntime.services.cleanupExpiredState().catch((error) => {
+      logBridgeEvent({
+        event: "bridge_cleanup_failed",
+        error: publicErrorMessage(error)
+      });
+    });
+  }, config.cleanupIntervalMs);
+  cleanupTimer.unref();
+
+  try {
+    await assertStartupReady(config, resolvedRuntime);
+  } catch (error) {
+    clearInterval(cleanupTimer);
+    await resolvedRuntime.services.close();
+    throw error;
+  }
+
   const app = createBridgeApp(config, resolvedRuntime);
   const server = createServer(getRequestListener(app.fetch));
   resolvedRuntime.relay.attach(server);
@@ -397,6 +456,7 @@ export async function startBridgeServer(
     server,
     port: resolvedPort,
     async close() {
+      clearInterval(cleanupTimer);
       resolvedRuntime.relay.closeAll();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -543,6 +603,27 @@ function handleError(c: Context, error: unknown): Response {
 
 function readClientType(value: unknown): ClientType | undefined {
   return value === "even_hub" ? "even_hub" : undefined;
+}
+
+async function assertStartupReady(config: BridgeConfig, runtime: BridgeRuntime): Promise<void> {
+  if (config.environment === "production" && config.bridgeStoreDriver !== "postgres") {
+    throw new Error("Production requires BRIDGE_STORE_DRIVER=postgres.");
+  }
+
+  if (!config.startupRequireReady) {
+    return;
+  }
+
+  const gateway = await runtime.openclaw.checkHealth();
+  const readiness = await runtime.services.checkReadiness(isGatewayHealthy(gateway));
+
+  if (!readiness.ready) {
+    throw new Error(`Bridge startup readiness failed: ${JSON.stringify(readiness)}`);
+  }
+}
+
+function isGatewayHealthy(value: unknown): boolean {
+  return Boolean(typeof value === "object" && value !== null && "ok" in value && (value as { ok?: unknown }).ok === true);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

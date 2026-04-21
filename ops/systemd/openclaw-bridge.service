@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenClaw mobile companion bridge
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+WorkingDirectory=/opt/openclaw/erg2/bridge
+EnvironmentFile=/etc/openclaw/bridge.env
+ExecStart=/usr/bin/node /opt/openclaw/erg2/bridge/dist/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

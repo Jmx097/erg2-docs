@@ -13,6 +13,17 @@ export interface BridgeHealthResponse {
   gateway?: unknown;
 }
 
+export interface BridgeReadyResponse {
+  ok: boolean;
+  ready: boolean;
+  bridge: string;
+  storage: "memory" | "postgres";
+  checks: {
+    database: boolean;
+    openclaw: boolean;
+  };
+}
+
 export interface CreatePairingSessionRequest {
   platform?: string;
   device_display_name_hint?: string;
@@ -27,6 +38,7 @@ export interface PairingSessionResponse {
 }
 
 export interface RedeemPairingRequest {
+  pairing_session_id?: string;
   pairing_code: string;
 }
 
@@ -77,6 +89,90 @@ export interface WebSocketTicketResponse {
   expires_at: string;
   ws_url: string;
 }
+
+export interface HelloMessage {
+  type: "hello";
+  conversation_id: string;
+  client_instance_id?: string;
+  app_state?: "foreground" | "background";
+  last_event_id?: string;
+}
+
+export interface PromptMessage {
+  type: "prompt";
+  conversation_id: string;
+  prompt_id: string;
+  text: string;
+}
+
+export interface PongMessage {
+  type: "pong";
+  ping_id: string;
+}
+
+export interface ResumeMessage {
+  type: "resume";
+  conversation_id: string;
+  last_event_id?: string;
+  pending_prompt_id?: string;
+}
+
+export type RelayClientMessage = HelloMessage | PromptMessage | PongMessage | ResumeMessage;
+
+export interface ReadyMessage {
+  type: "ready";
+  connection_id: string;
+  heartbeat_interval_seconds: number;
+  pong_timeout_seconds: number;
+  access_token_expires_at: string;
+}
+
+export interface ReplyDeltaMessage {
+  type: "reply.delta";
+  event_id: string;
+  prompt_id: string;
+  delta: string;
+}
+
+export interface ReplyFinalMessage {
+  type: "reply.final";
+  event_id: string;
+  prompt_id: string;
+  text: string;
+  request_id: string;
+}
+
+export interface RelayErrorMessage {
+  type: "error";
+  code: string;
+  message: string;
+  retryable: boolean;
+  prompt_id?: string;
+}
+
+export interface PingMessage {
+  type: "ping";
+  ping_id: string;
+}
+
+export interface TokenExpiringMessage {
+  type: "token.expiring";
+  expires_at: string;
+}
+
+export interface RevokedMessage {
+  type: "revoked";
+  reason: string;
+}
+
+export type RelayServerMessage =
+  | ReadyMessage
+  | ReplyDeltaMessage
+  | ReplyFinalMessage
+  | RelayErrorMessage
+  | PingMessage
+  | TokenExpiringMessage
+  | RevokedMessage;
 
 export interface TurnRequest {
   conversation_id: string;

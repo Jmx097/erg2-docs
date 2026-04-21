@@ -3,6 +3,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type { BridgeConfig } from "./config.js";
 import { ApiError } from "./errors.js";
 import { createId } from "./ids.js";
+import { logBridgeEvent } from "./logger.js";
 import { buildMobileSessionKey, normalizeConversationId } from "./session-key.js";
 import type { BridgeServices } from "./services.js";
 import type { OpenClawChatPort } from "./server.js";
@@ -57,6 +58,11 @@ export class RelayServer {
 
       const ticket = upgradeUrl.searchParams.get("ticket");
       if (!ticket) {
+        logBridgeEvent({
+          event: "relay_upgrade_rejected",
+          reason: "missing_ticket",
+          remoteIp: request.socket.remoteAddress
+        });
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         return;
@@ -67,6 +73,11 @@ export class RelayServer {
         try {
           consumedTicket = await this.services.consumeWebSocketTicket(ticket);
         } catch {
+          logBridgeEvent({
+            event: "relay_upgrade_rejected",
+            reason: "invalid_ticket",
+            remoteIp: request.socket.remoteAddress
+          });
           socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
           socket.destroy();
           return;
@@ -135,6 +146,13 @@ export class RelayServer {
     };
 
     this.activeConnections.set(connection.deviceId, connection);
+    logBridgeEvent({
+      event: "relay_connected",
+      connectionId: connection.connectionId,
+      deviceId: connection.deviceId,
+      conversationId: connection.conversationId,
+      remoteIp: connection.remoteIp
+    });
     void this.services.recordConnectionEvent({
       deviceId: connection.deviceId,
       connectionId: connection.connectionId,
@@ -277,6 +295,14 @@ export class RelayServer {
     }
 
     const requestId = createId("req");
+    logBridgeEvent({
+      event: "relay_prompt",
+      connectionId: connection.connectionId,
+      deviceId: connection.deviceId,
+      conversationId,
+      promptId,
+      requestId
+    });
     const result = await this.openclaw.createChatCompletion({
       requestId,
       sessionKey: buildMobileSessionKey(connection.deviceId, conversationId),
@@ -375,6 +401,14 @@ export class RelayServer {
 
     if (this.activeConnections.get(connection.deviceId)?.connectionId === connection.connectionId) {
       this.activeConnections.delete(connection.deviceId);
+      logBridgeEvent({
+        event: "relay_closed",
+        connectionId: connection.connectionId,
+        deviceId: connection.deviceId,
+        conversationId: connection.conversationId,
+        remoteIp: connection.remoteIp,
+        closeCode
+      });
       void this.services.recordConnectionEvent({
         deviceId: connection.deviceId,
         connectionId: connection.connectionId,

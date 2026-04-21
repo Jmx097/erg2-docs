@@ -109,6 +109,22 @@ describe("bridge app", () => {
     });
   });
 
+  it("exposes a non-ready readiness response until postgres-backed production mode is in use", async () => {
+    const app = createBridgeApp(config, createBridgeRuntime(config, mockOpenClaw()));
+
+    const response = await app.request("/v1/ready");
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      ready: false,
+      storage: "memory",
+      checks: {
+        database: true,
+        openclaw: true
+      }
+    });
+  });
+
   it("redeems, registers, refreshes, and lists devices on the v1 flow", async () => {
     const app = createBridgeApp(config, createBridgeRuntime(config, mockOpenClaw()));
     const pairing = await createPairingSession(app);
@@ -116,7 +132,10 @@ describe("bridge app", () => {
     const redeemResponse = await app.request("/v1/pairing/redeem", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ pairing_code: pairing.pairing_code })
+      body: JSON.stringify({
+        pairing_session_id: pairing.pairing_session_id,
+        pairing_code: pairing.pairing_code
+      })
     });
     const redeemed = await redeemResponse.json();
 
@@ -176,6 +195,43 @@ describe("bridge app", () => {
           status: "active"
         })
       ]
+    });
+  });
+
+  it("locks a pairing session after repeated incorrect attempts when the pairing session id is supplied", async () => {
+    const app = createBridgeApp(
+      createTestConfig({ pairingCodeMaxAttempts: 2 }),
+      createBridgeRuntime(createTestConfig({ pairingCodeMaxAttempts: 2 }), mockOpenClaw())
+    );
+    const pairing = await createPairingSession(app);
+
+    const firstResponse = await app.request("/v1/pairing/redeem", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        pairing_session_id: pairing.pairing_session_id,
+        pairing_code: "ZZZZ-9999"
+      })
+    });
+    expect(firstResponse.status).toBe(400);
+    expect(await firstResponse.json()).toMatchObject({
+      code: "pairing_code_incorrect",
+      details: {
+        attempts_remaining: 1
+      }
+    });
+
+    const secondResponse = await app.request("/v1/pairing/redeem", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        pairing_session_id: pairing.pairing_session_id,
+        pairing_code: "ZZZZ-9999"
+      })
+    });
+    expect(secondResponse.status).toBe(423);
+    expect(await secondResponse.json()).toMatchObject({
+      code: "pairing_code_locked"
     });
   });
 
@@ -359,7 +415,10 @@ async function registerDevice(app: ReturnType<typeof createBridgeApp>, clientTyp
   const redeemResponse = await app.request("/v1/pairing/redeem", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ pairing_code: pairing.pairing_code })
+    body: JSON.stringify({
+      pairing_session_id: pairing.pairing_session_id,
+      pairing_code: pairing.pairing_code
+    })
   });
   const redeemed = await redeemResponse.json();
 

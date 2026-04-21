@@ -1,4 +1,4 @@
-import { SignJWT, jwtVerify } from "jose";
+import { SignJWT, importPKCS8, importSPKI, jwtVerify } from "jose";
 import type { JWTPayload } from "jose";
 import type { BridgeConfig } from "./config.js";
 import { createId } from "./ids.js";
@@ -21,22 +21,30 @@ interface BridgeAccessTokenPayload extends JWTPayload {
 }
 
 export class AccessTokenService {
-  private readonly secret: Uint8Array;
+  private readonly signingKeyPromise: Promise<CryptoKey>;
+  private readonly verificationKeyPromise: Promise<CryptoKey>;
 
-  constructor(private readonly config: Pick<BridgeConfig, "accessTokenAudience" | "accessTokenIssuer" | "accessTokenSecret">) {
-    this.secret = new TextEncoder().encode(config.accessTokenSecret);
+  constructor(
+    private readonly config: Pick<
+      BridgeConfig,
+      "accessTokenAudience" | "accessTokenIssuer" | "accessTokenPrivateKey" | "accessTokenPublicKey"
+    >
+  ) {
+    this.signingKeyPromise = importPKCS8(config.accessTokenPrivateKey, "EdDSA");
+    this.verificationKeyPromise = importSPKI(config.accessTokenPublicKey, "EdDSA");
   }
 
   async issue(input: { deviceId: string; scope: string[]; ttlMs: number; now?: Date }): Promise<IssuedAccessToken> {
     const now = input.now ?? new Date();
     const expiresAt = new Date(now.getTime() + input.ttlMs);
     const jwtId = createId("atjti");
+    const signingKey = await this.signingKeyPromise;
 
     const token = await new SignJWT({
       device_id: input.deviceId,
       scope: input.scope.join(" ")
     })
-      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setProtectedHeader({ alg: "EdDSA", typ: "JWT" })
       .setIssuer(this.config.accessTokenIssuer)
       .setAudience(this.config.accessTokenAudience)
       .setSubject(`device:${input.deviceId}`)
@@ -44,13 +52,14 @@ export class AccessTokenService {
       .setIssuedAt(Math.floor(now.getTime() / 1000))
       .setNotBefore(Math.floor(now.getTime() / 1000))
       .setExpirationTime(Math.floor(expiresAt.getTime() / 1000))
-      .sign(this.secret);
+      .sign(signingKey);
 
     return { token, expiresAt };
   }
 
   async verify(token: string, requiredScopes: string[] = []): Promise<VerifiedAccessToken> {
-    const verified = await jwtVerify<BridgeAccessTokenPayload>(token, this.secret, {
+    const verificationKey = await this.verificationKeyPromise;
+    const verified = await jwtVerify<BridgeAccessTokenPayload>(token, verificationKey, {
       issuer: this.config.accessTokenIssuer,
       audience: this.config.accessTokenAudience
     });

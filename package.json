@@ -6,14 +6,17 @@
   "workspaces": [
     "packages/protocol",
     "bridge",
-    "glasses"
+    "glasses",
+    "mobile"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
     "test": "npm run test --workspaces",
     "typecheck": "npm run typecheck --workspaces",
+    "test:integration": "npm run test:integration -w bridge",
     "dev:bridge": "npm run dev -w bridge",
-    "dev:glasses": "npm run dev -w glasses"
+    "dev:glasses": "npm run dev -w glasses",
+    "dev:mobile": "npm run dev -w mobile"
   },
   "engines": {
     "node": ">=20"

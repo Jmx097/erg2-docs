@@ -12,6 +12,7 @@ import type {
 
 export interface BridgeStore {
   withTransaction<T>(callback: (store: BridgeStore) => Promise<T>): Promise<T>;
+  ping(): Promise<void>;
   createPairingSession(record: PairingSessionRecord): Promise<void>;
   findPairingSessionByCodeHash(codeHash: string): Promise<PairingSessionRecord | undefined>;
   getPairingSessionById(pairingSessionId: string): Promise<PairingSessionRecord | undefined>;
@@ -37,5 +38,11 @@ export interface BridgeStore {
   createConnectionEvent(record: ConnectionEventRecord): Promise<void>;
   upsertPromptResult(record: PromptResultRecord): Promise<void>;
   getPromptResult(deviceId: string, promptId: string): Promise<PromptResultRecord | undefined>;
+  cleanupExpired(now: Date, promptResultRetentionMs: number): Promise<{
+    bootstrapTokensDeleted: number;
+    refreshTokensDeleted: number;
+    websocketTicketsDeleted: number;
+    promptResultsDeleted: number;
+  }>;
   close?(): Promise<void>;
 }

@@ -1,4 +1,5 @@
 import type {
+  BridgeReadyResponse,
   ClientType,
   ListDevicesResponse,
   PairingSessionResponse,
@@ -13,6 +14,7 @@ import { ApiError } from "./errors.js";
 import { hashValue } from "./hash.js";
 import { createId, createOpaqueToken, createPairingCode } from "./ids.js";
 import { AccessTokenService } from "./access-tokens.js";
+import { logBridgeEvent } from "./logger.js";
 import { InMemoryBridgeStore } from "./memory-store.js";
 import { normalizeConversationId } from "./session-key.js";
 import type {
@@ -81,17 +83,24 @@ export class BridgeServices {
       pairing_code: pairingCode,
       relay_base_url: this.config.relayBaseUrl,
       expires_at: expiresAt.toISOString(),
-      qr_payload: `openclaw://pair?relay=${encodeURIComponent(this.config.relayBaseUrl)}&code=${encodeURIComponent(pairingCode)}`
+      qr_payload:
+        `openclaw://pair?relay=${encodeURIComponent(this.config.relayBaseUrl)}` +
+        `&session=${encodeURIComponent(pairingSessionId)}` +
+        `&code=${encodeURIComponent(pairingCode)}`
     };
   }
 
-  async redeemPairingCode(pairingCodeInput: string): Promise<RedeemPairingResponse> {
+  async redeemPairingCode(pairingCodeInput: string, pairingSessionIdInput?: string): Promise<RedeemPairingResponse> {
     const pairingCode = normalizePairingCode(pairingCodeInput);
     this.validatePairingCodeInput(pairingCodeInput);
 
     return this.store.withTransaction(async (store) => {
-      const session = await store.findPairingSessionByCodeHash(this.hashPairingCode(pairingCode));
       const now = this.now();
+      const pairingSessionId = pairingSessionIdInput?.trim();
+      const codeHash = this.hashPairingCode(pairingCode);
+      const session = pairingSessionId
+        ? await store.getPairingSessionById(pairingSessionId)
+        : await store.findPairingSessionByCodeHash(codeHash);
 
       if (!session) {
         throw new ApiError("Pairing code not found.", 404, "pairing_code_not_found");
@@ -109,6 +118,21 @@ export class BridgeServices {
         session.status = "expired";
         await store.updatePairingSession(session);
         throw new ApiError("That pairing code expired.", 410, "pairing_code_expired");
+      }
+
+      if (pairingSessionId && session.codeHash !== codeHash) {
+        session.failedAttempts += 1;
+
+        if (session.failedAttempts >= this.config.pairingCodeMaxAttempts) {
+          session.status = "locked";
+          await store.updatePairingSession(session);
+          throw new ApiError("That pairing code is locked.", 423, "pairing_code_locked");
+        }
+
+        await store.updatePairingSession(session);
+        throw new ApiError("That pairing code is incorrect.", 400, "pairing_code_incorrect", {
+          attempts_remaining: this.config.pairingCodeMaxAttempts - session.failedAttempts
+        });
       }
 
       const bootstrapToken = createOpaqueToken("btp");
@@ -442,6 +466,44 @@ export class BridgeServices {
     return this.store.getPromptResult(deviceId, promptId);
   }
 
+  async checkReadiness(openclawHealthy: boolean): Promise<BridgeReadyResponse> {
+    let database = false;
+
+    try {
+      await this.store.ping();
+      database = true;
+    } catch {
+      database = false;
+    }
+
+    const storage = this.config.bridgeStoreDriver;
+    const ready = database && openclawHealthy && storage === "postgres";
+
+    return {
+      ok: ready,
+      ready,
+      bridge: "openclaw-mobile-companion",
+      storage,
+      checks: {
+        database,
+        openclaw: openclawHealthy
+      }
+    };
+  }
+
+  async cleanupExpiredState(): Promise<void> {
+    const now = this.now();
+    const deleted = await this.store.cleanupExpired(now, this.config.promptResultRetentionMs);
+
+    if (Object.values(deleted).some((count) => count > 0)) {
+      logBridgeEvent({
+        event: "bridge_cleanup",
+        storage: this.config.bridgeStoreDriver,
+        ...deleted
+      });
+    }
+  }
+
   async recordConnectionEvent(input: {
     deviceId: string;
     connectionId: string;
@@ -488,11 +550,11 @@ export class BridgeServices {
   }
 
   private hashOpaque(rawValue: string): string {
-    return hashValue(this.config.accessTokenSecret, rawValue);
+    return hashValue(this.config.tokenHashSecret, rawValue);
   }
 
   private hashPairingCode(pairingCode: string): string {
-    return hashValue(this.config.accessTokenSecret, pairingCode);
+    return hashValue(this.config.tokenHashSecret, pairingCode);
   }
 
   private validatePairingCodeInput(value: string): void {

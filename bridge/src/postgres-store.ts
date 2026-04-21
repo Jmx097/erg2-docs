@@ -1,3 +1,6 @@
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool, type PoolClient, type QueryResultRow } from "pg";
 import type { BridgeConfig } from "./config.js";
 import type {
@@ -43,7 +46,7 @@ export class PostgresBridgeStore implements BridgeStore {
     const tableNames = buildTableNames(config.databaseSchema);
 
     if (config.databaseAutoMigrate) {
-      await ensureBridgeSchema(pool, config.databaseSchema, tableNames);
+      await runMigrations(pool, config.databaseSchema);
     }
 
     return new PostgresBridgeStore({
@@ -82,6 +85,10 @@ export class PostgresBridgeStore implements BridgeStore {
     } finally {
       client.release();
     }
+  }
+
+  async ping(): Promise<void> {
+    await this.query("select 1");
   }
 
   async createPairingSession(record: PairingSessionRecord): Promise<void> {
@@ -438,6 +445,28 @@ export class PostgresBridgeStore implements BridgeStore {
     return result.rows[0] ? mapPromptResult(result.rows[0]) : undefined;
   }
 
+  async cleanupExpired(now: Date, promptResultRetentionMs: number): Promise<{
+    bootstrapTokensDeleted: number;
+    refreshTokensDeleted: number;
+    websocketTicketsDeleted: number;
+    promptResultsDeleted: number;
+  }> {
+    const promptCutoff = new Date(now.getTime() - promptResultRetentionMs);
+    const [bootstrapTokensDeleted, refreshTokensDeleted, websocketTicketsDeleted, promptResultsDeleted] = await Promise.all([
+      this.query(`delete from ${this.tableNames.bootstrapTokens} where expires_at <= $1`, [now]),
+      this.query(`delete from ${this.tableNames.refreshTokens} where expires_at <= $1`, [now]),
+      this.query(`delete from ${this.tableNames.websocketTickets} where expires_at <= $1 or used_at is not null`, [now]),
+      this.query(`delete from ${this.tableNames.promptResults} where created_at <= $1`, [promptCutoff])
+    ]);
+
+    return {
+      bootstrapTokensDeleted: bootstrapTokensDeleted.rowCount ?? 0,
+      refreshTokensDeleted: refreshTokensDeleted.rowCount ?? 0,
+      websocketTicketsDeleted: websocketTicketsDeleted.rowCount ?? 0,
+      promptResultsDeleted: promptResultsDeleted.rowCount ?? 0
+    };
+  }
+
   async close(): Promise<void> {
     if (this.ownPool && this.pool) {
       await this.pool.end();
@@ -457,117 +486,75 @@ export class PostgresBridgeStore implements BridgeStore {
   }
 }
 
-async function ensureBridgeSchema(
-  pool: Pool,
-  schemaName: string,
-  tableNames: ReturnType<typeof buildTableNames>
-): Promise<void> {
-  await pool.query(`create schema if not exists ${quoteIdentifier(schemaName)}`);
+async function runMigrations(pool: Pool, schemaName: string): Promise<void> {
+  const quotedSchema = quoteIdentifier(schemaName);
+
+  await pool.query(`create schema if not exists ${quotedSchema}`);
   await pool.query(`
-    create table if not exists ${tableNames.pairingSessions} (
-      pairing_session_id text primary key,
-      code_hash text not null unique,
-      code_last4 text not null,
-      status text not null,
-      created_at timestamptz not null,
-      expires_at timestamptz not null,
-      redeemed_at timestamptz null,
-      failed_attempts integer not null default 0,
-      created_by text not null,
-      platform text not null,
-      device_display_name_hint text null
-    );
-
-    create table if not exists ${tableNames.bootstrapTokens} (
-      token_hash text primary key,
-      pairing_session_id text not null references ${tableNames.pairingSessions}(pairing_session_id) on delete cascade,
-      created_at timestamptz not null,
-      expires_at timestamptz not null,
-      used_at timestamptz null
-    );
-
-    create table if not exists ${tableNames.devices} (
-      device_id text primary key,
-      device_display_name text not null,
-      platform text not null,
-      client_type text not null,
-      status text not null,
-      created_at timestamptz not null,
-      last_seen_at timestamptz null,
-      last_ip text null,
-      last_app_version text null,
-      current_refresh_family_id text not null,
-      revoked_at timestamptz null,
-      revoke_reason text null
-    );
-
-    create table if not exists ${tableNames.refreshFamilies} (
-      refresh_family_id text primary key,
-      device_id text not null references ${tableNames.devices}(device_id) on delete cascade,
-      client_type text not null,
-      status text not null,
-      created_at timestamptz not null,
-      compromised_at timestamptz null,
-      revoke_reason text null
-    );
-
-    create table if not exists ${tableNames.refreshTokens} (
-      refresh_token_id text primary key,
-      refresh_family_id text not null references ${tableNames.refreshFamilies}(refresh_family_id) on delete cascade,
-      token_hash text not null unique,
-      parent_refresh_token_id text null,
-      issued_at timestamptz not null,
-      expires_at timestamptz not null,
-      used_at timestamptz null,
-      replaced_by_refresh_token_id text null,
-      revoked_at timestamptz null
-    );
-
-    create table if not exists ${tableNames.websocketTickets} (
-      ticket_hash text primary key,
-      ticket_id text not null unique,
-      device_id text not null references ${tableNames.devices}(device_id) on delete cascade,
-      conversation_id text not null,
-      access_expires_at timestamptz not null,
-      created_at timestamptz not null,
-      expires_at timestamptz not null,
-      used_at timestamptz null
-    );
-
-    create table if not exists ${tableNames.revocations} (
-      revocation_id text primary key,
-      subject_type text not null,
-      subject_id text not null,
-      reason text not null,
-      created_at timestamptz not null,
-      created_by text not null
-    );
-
-    create table if not exists ${tableNames.connectionEvents} (
-      connection_event_id text primary key,
-      device_id text not null,
-      connection_id text not null,
-      event_type text not null,
-      occurred_at timestamptz not null,
-      ip text null,
-      close_code integer null,
-      details_json jsonb null
-    );
-
-    create table if not exists ${tableNames.promptResults} (
-      device_id text not null,
-      prompt_id text not null,
-      conversation_id text not null,
-      request_id text not null,
-      text text not null,
-      created_at timestamptz not null,
-      primary key (device_id, prompt_id)
-    );
-
-    create index if not exists prompt_results_created_at_idx on ${tableNames.promptResults} (created_at);
-    create index if not exists refresh_tokens_family_idx on ${tableNames.refreshTokens} (refresh_family_id);
-    create index if not exists websocket_tickets_device_idx on ${tableNames.websocketTickets} (device_id);
+    create table if not exists ${quotedSchema}."schema_migrations" (
+      version text primary key,
+      applied_at timestamptz not null default now()
+    )
   `);
+
+  const appliedVersions = new Set(
+    (
+      await pool.query<{ version: string }>(`select version from ${quotedSchema}."schema_migrations" order by version asc`)
+    ).rows.map((row) => row.version)
+  );
+
+  for (const migration of loadSqlMigrations()) {
+    if (appliedVersions.has(migration.version)) {
+      continue;
+    }
+
+    await pool.query("BEGIN");
+
+    try {
+      await pool.query(migration.sql.replaceAll("{{schema}}", quotedSchema));
+      await pool.query(`insert into ${quotedSchema}."schema_migrations" (version) values ($1)`, [migration.version]);
+      await pool.query("COMMIT");
+    } catch (error) {
+      await pool.query("ROLLBACK");
+      throw new Error(`Failed applying migration ${migration.fileName}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+function loadSqlMigrations(): Array<{ version: string; fileName: string; sql: string }> {
+  const directory = resolveMigrationsDirectory();
+  const entries = readdirSync(directory)
+    .filter((fileName) => /^\d+_.+\.sql$/i.test(fileName))
+    .sort((left, right) => left.localeCompare(right));
+
+  return entries.map((fileName) => {
+    const match = /^(\d+)_/.exec(fileName);
+    if (!match) {
+      throw new Error(`Invalid migration filename: ${fileName}`);
+    }
+
+    return {
+      version: match[1]!,
+      fileName,
+      sql: readFileSync(path.join(directory, fileName), "utf8")
+    };
+  });
+}
+
+function resolveMigrationsDirectory(): string {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    path.resolve(process.cwd(), "bridge", "migrations"),
+    path.resolve(process.cwd(), "migrations"),
+    path.resolve(moduleDir, "..", "migrations")
+  ];
+
+  const directory = candidates.find((candidate) => existsSync(candidate));
+  if (!directory) {
+    throw new Error("Could not locate bridge SQL migrations directory.");
+  }
+
+  return directory;
 }
 
 function buildTableNames(schemaName: string) {

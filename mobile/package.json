@@ -1,0 +1,31 @@
+{
+  "name": "mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "scripts": {
+    "dev": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "build": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openclaw/protocol": "file:../packages/protocol",
+    "@react-native-community/netinfo": "^11.4.1",
+    "expo": "~54.0.33",
+    "expo-constants": "^55.0.14",
+    "expo-secure-store": "~15.0.7",
+    "expo-status-bar": "~3.0.9",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/react": "~19.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.4"
+  }
+}

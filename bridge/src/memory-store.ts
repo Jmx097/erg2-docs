@@ -44,6 +44,10 @@ export class InMemoryBridgeStore implements BridgeStore {
     return callback(this);
   }
 
+  async ping(): Promise<void> {
+    return;
+  }
+
   async createPairingSession(record: PairingSessionRecord): Promise<void> {
     this.state.pairingSessions.set(record.pairingSessionId, record);
     this.state.pairingSessionsByCodeHash.set(record.codeHash, record.pairingSessionId);
@@ -164,6 +168,54 @@ export class InMemoryBridgeStore implements BridgeStore {
 
   async getPromptResult(deviceId: string, promptId: string): Promise<PromptResultRecord | undefined> {
     return this.state.promptResults.get(promptResultKey(deviceId, promptId));
+  }
+
+  async cleanupExpired(now: Date, promptResultRetentionMs: number): Promise<{
+    bootstrapTokensDeleted: number;
+    refreshTokensDeleted: number;
+    websocketTicketsDeleted: number;
+    promptResultsDeleted: number;
+  }> {
+    let bootstrapTokensDeleted = 0;
+    for (const [tokenHash, record] of this.state.bootstrapTokens.entries()) {
+      if (record.expiresAt.getTime() <= now.getTime()) {
+        this.state.bootstrapTokens.delete(tokenHash);
+        bootstrapTokensDeleted += 1;
+      }
+    }
+
+    let refreshTokensDeleted = 0;
+    for (const [tokenHash, record] of this.state.refreshTokens.entries()) {
+      if (record.expiresAt.getTime() <= now.getTime()) {
+        this.state.refreshTokens.delete(tokenHash);
+        this.state.refreshTokensByFamilyId.get(record.refreshFamilyId)?.delete(tokenHash);
+        refreshTokensDeleted += 1;
+      }
+    }
+
+    let websocketTicketsDeleted = 0;
+    for (const [ticketHash, record] of this.state.websocketTickets.entries()) {
+      if (record.expiresAt.getTime() <= now.getTime() || Boolean(record.usedAt)) {
+        this.state.websocketTickets.delete(ticketHash);
+        websocketTicketsDeleted += 1;
+      }
+    }
+
+    const cutoffMs = now.getTime() - promptResultRetentionMs;
+    let promptResultsDeleted = 0;
+    for (const [key, record] of this.state.promptResults.entries()) {
+      if (record.createdAt.getTime() <= cutoffMs) {
+        this.state.promptResults.delete(key);
+        promptResultsDeleted += 1;
+      }
+    }
+
+    return {
+      bootstrapTokensDeleted,
+      refreshTokensDeleted,
+      websocketTicketsDeleted,
+      promptResultsDeleted
+    };
   }
 }
 

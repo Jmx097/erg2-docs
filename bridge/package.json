@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
+    "test:integration": "vitest run src/postgres-store.integration.test.ts",
     "pair:create": "tsx src/pairing-cli.ts"
   },
   "dependencies": {

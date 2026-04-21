@@ -1,4 +1,5 @@
 import type { BridgeConfig } from "./config.js";
+import { logBridgeEvent } from "./logger.js";
 
 export const G2_HUD_SYSTEM_PROMPT =
   "You are OpenClaw replying on Even Realities G2 glasses. Reply for a small HUD, under 400 characters unless the user explicitly asks for more. Avoid markdown tables and long lists.";
@@ -400,7 +401,7 @@ function messageForFailureKind(failureKind: FailureKind): string {
 }
 
 function logJson(entry: AttemptLogEntry | ResultLogEntry): void {
-  console.log(JSON.stringify(entry));
+  logBridgeEvent(entry);
 }
 
 async function sleep(ms: number): Promise<void> {
