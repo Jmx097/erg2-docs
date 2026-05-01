@@ -13,10 +13,13 @@ import {
 
 const statusBadge = requireElement<HTMLSpanElement>("#status-badge");
 const statusDetail = requireElement<HTMLParagraphElement>("#status-detail");
+const transportMode = requireElement<HTMLParagraphElement>("#transport-mode");
+const installId = requireElement<HTMLParagraphElement>("#install-id");
 const accessExpiry = requireElement<HTMLParagraphElement>("#access-expiry");
 const pairForm = requireElement<HTMLFormElement>("#pair-form");
 const relayUrlInput = requireElement<HTMLInputElement>("#relay-url");
 const relayUrlError = requireElement<HTMLElement>("#relay-url-error");
+const legacyBridgeTokenInput = requireElement<HTMLInputElement>("#legacy-bridge-token");
 const pairingCodeInput = requireElement<HTMLInputElement>("#pairing-code");
 const pairingCodeError = requireElement<HTMLElement>("#pairing-code-error");
 const deviceDisplayNameInput = requireElement<HTMLInputElement>("#device-display-name");
@@ -85,6 +88,9 @@ function wireUi(controller: EvenHubAppController): void {
   pairingCodeInput.addEventListener("input", () => {
     controller.setPairingField("pairingCode", pairingCodeInput.value);
   });
+  legacyBridgeTokenInput.addEventListener("input", () => {
+    controller.setLegacyBridgeToken(legacyBridgeTokenInput.value);
+  });
   deviceDisplayNameInput.addEventListener("input", () => {
     controller.setPairingField("deviceDisplayName", deviceDisplayNameInput.value);
   });
@@ -109,11 +115,14 @@ function renderSnapshot(snapshot: ControllerSnapshot): void {
   document.body.dataset.status = snapshot.status;
   statusBadge.textContent = snapshot.status.replace(/_/g, " ");
   statusDetail.textContent = snapshot.statusDetail;
+  transportMode.textContent = snapshot.transportMode.replace(/_/g, " ") || "none";
+  installId.textContent = snapshot.installId;
   accessExpiry.textContent = snapshot.accessTokenExpiresAt
     ? new Date(snapshot.accessTokenExpiresAt).toLocaleString()
     : "Not issued yet";
 
   setInputValue(relayUrlInput, snapshot.relayBaseUrl);
+  setInputValue(legacyBridgeTokenInput, snapshot.legacyBridgeToken);
   setInputValue(pairingCodeInput, snapshot.pairingCode);
   setInputValue(deviceDisplayNameInput, snapshot.deviceDisplayName);
   setInputValue(promptDraft, snapshot.promptDraft);
@@ -125,10 +134,13 @@ function renderSnapshot(snapshot: ControllerSnapshot): void {
   pairSubmit.disabled = snapshot.status === "pairing";
   pairSubmit.textContent = snapshot.status === "pairing" ? "Pairing..." : "Pair Device";
 
-  const sessionAvailable = snapshot.status !== "unpaired" || Boolean(snapshot.storedRegistration);
+  const sessionAvailable =
+    snapshot.status !== "unpaired" || snapshot.transportMode === "legacy_v0" || Boolean(snapshot.storedRegistration);
   sendPromptButton.disabled = !sessionAvailable || snapshot.status === "pairing";
-  refreshSessionButton.disabled = !snapshot.storedRegistration || snapshot.status === "pairing";
-  reconnectSessionButton.disabled = !snapshot.storedRegistration || snapshot.status === "pairing";
+  refreshSessionButton.disabled =
+    !snapshot.storedRegistration || snapshot.status === "pairing" || snapshot.transportMode !== "paired_v1";
+  reconnectSessionButton.disabled =
+    (!snapshot.storedRegistration && snapshot.transportMode !== "legacy_v0") || snapshot.status === "pairing";
   repairSubmit.disabled = snapshot.status === "pairing";
 
   sendPromptButton.textContent = snapshot.status === "request_in_progress" ? "Sending..." : "Send Prompt";
@@ -148,6 +160,8 @@ function renderBootOnly(message: string): void {
   document.body.dataset.status = "booting";
   statusBadge.textContent = "booting";
   statusDetail.textContent = message;
+  transportMode.textContent = "none";
+  installId.textContent = "Loading...";
   accessExpiry.textContent = "Not issued yet";
   replyLog.textContent = "No reply yet.";
   lastError.hidden = true;

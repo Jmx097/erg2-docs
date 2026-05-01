@@ -12,6 +12,18 @@ import type {
 
 export type FetchLike = typeof fetch;
 
+interface LegacyTurnRequest {
+  installId: string;
+  prompt: string;
+}
+
+interface LegacyTurnResponse {
+  reply: string;
+  model: string;
+  sessionKey: string;
+  requestId: string;
+}
+
 export class BridgeApiError extends Error {
   constructor(
     message: string,
@@ -30,6 +42,22 @@ export class BridgeClient {
   async health(baseUrl: string, signal?: AbortSignal): Promise<BridgeHealthResponse> {
     const response = await this.fetchJson<BridgeHealthResponse>(`${normalizeRelayBaseUrl(baseUrl)}/v1/health`, {
       method: "GET",
+      signal
+    });
+
+    if (!response.ok) {
+      throw new Error("Bridge health check failed");
+    }
+
+    return response;
+  }
+
+  async legacyHealth(baseUrl: string, bridgeToken: string, signal?: AbortSignal): Promise<BridgeHealthResponse> {
+    const response = await this.fetchJson<BridgeHealthResponse>(`${normalizeRelayBaseUrl(baseUrl)}/health`, {
+      method: "GET",
+      headers: {
+        authorization: `Bearer ${bridgeToken}`
+      },
       signal
     });
 
@@ -84,6 +112,23 @@ export class BridgeClient {
       method: "POST",
       headers: {
         authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify(input),
+      signal
+    });
+  }
+
+  async sendLegacyTurn(
+    baseUrl: string,
+    bridgeToken: string,
+    input: LegacyTurnRequest,
+    signal?: AbortSignal
+  ): Promise<LegacyTurnResponse> {
+    return this.fetchJson<LegacyTurnResponse>(`${normalizeRelayBaseUrl(baseUrl)}/v0/turn`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${bridgeToken}`,
         "content-type": "application/json"
       },
       body: JSON.stringify(input),

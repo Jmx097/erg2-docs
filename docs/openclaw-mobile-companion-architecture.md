@@ -77,15 +77,16 @@ Today the repo contains:
 - `laptop-bridge/`: a local Node/TypeScript BLE bridge with mock mode, health
   endpoint, structured logs, normalized event forwarding, and an Xreal G2 BLE
   adapter stub awaiting final UUID and protocol constants
-- `glasses/`: an Even Hub prototype app that stores a local `installId` and uses
-  `VITE_G2_BRIDGE_TOKEN`
+- `glasses/`: a thin Even Hub app that stores a durable local `installId`,
+  persists relay config in Even Hub storage, prefers paired HTTP `POST /v1/turn`,
+  and can optionally fall back to authenticated legacy `POST /v0/turn`
 
 Treat those pieces as:
 
 - `bridge/` and `mobile/` are the canonical implementation surfaces for auth,
   pairing, session identity, relay lifecycle, and production deployment
-- `glasses/` remains a useful prototype reference for HUD rendering, simulator
-  flow, and upstream OpenClaw calls
+- `glasses/` is the repo-owned thin Even Hub client path for HUD rendering and
+  HTTP prompt delivery through the bridge without relying on terminal mode
 - local repo verification is green, but staging validation and recovery
   rehearsal still need to run against a real host
 - remaining mobile gap: G2-specific BLE UUID/config finalization and hardware
@@ -145,6 +146,26 @@ Responsibilities:
 
 The mobile app is the only user-facing production client that needs long-lived
 credentials.
+
+### 6.1.1 Even Hub thin client
+
+Responsibilities:
+
+- keep a durable local `installId` plus local relay config in Even Hub storage
+- pair once against the VPS and store `device_id`, refresh token, and default
+  conversation for the preferred v1 path
+- send prompts over HTTP `POST /v1/turn` instead of maintaining a long-lived
+  websocket
+- optionally use authenticated legacy `GET /health` and `POST /v0/turn` when a
+  bridge token is configured for compatibility with the existing bridge auth
+- recover from WebView foreground/background churn by restoring config and
+  reusing the stored device registration
+
+Constraints:
+
+- do not hardcode secrets in the package
+- do not call OpenClaw directly from the client
+- keep replies concise enough for HUD display
 
 ### 6.2 Pairing/bootstrap module
 

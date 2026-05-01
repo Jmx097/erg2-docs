@@ -17,8 +17,9 @@ lives in [docs/openclaw-mobile-companion-architecture.md](docs/openclaw-mobile-c
 - `mobile/` is the React Native-oriented production client with native BLE
   adapter wiring, secure storage, auth/session, websocket lifecycle, and repair
   modules.
-- `glasses/` is still an Even Hub prototype for simulator and diagnostic use.
-  It is not the shipped production client.
+- `glasses/` is a thin Even Hub `.ehpk` client for Even Realities G2. It
+  prefers HTTP `/v1/turn` with paired device credentials and can optionally use
+  the legacy authenticated `/v0/turn` path for compatibility.
 
 ## Status
 
@@ -131,6 +132,15 @@ cp glasses/.env.example glasses/.env
 npm run dev:glasses
 ```
 
+Even Hub package build:
+
+```bash
+npm run build -w glasses
+npm run pack -w glasses
+```
+
+The package artifact is written to `glasses/openclaw-g2.ehpk`.
+
 Mobile workspace:
 
 ```bash
@@ -156,6 +166,51 @@ Bridge production assumptions are:
 - OpenClaw remains localhost-bound
 - `/v1/ready` only passes when both Postgres and OpenClaw are healthy
 - `HARDWARE_BRIDGE_TOKEN` is set separately for the laptop bridge ingest path
+
+## Even Hub `.ehpk` Path
+
+The `glasses/` workspace is the repo-owned Even Hub client path for G2:
+
+- default transport: paired `POST /v1/turn` over HTTPS with rotated access and
+  refresh credentials stored in Even Hub local storage
+- compatibility fallback: authenticated `GET /health` and `POST /v0/turn` when
+  a legacy bridge token is configured locally
+- no OpenClaw terminal mode and no direct client access to localhost-bound
+  OpenClaw
+- no long-lived websocket requirement for the HUD client
+
+Build, package, and verify:
+
+```bash
+npm run typecheck -w glasses
+npm run test -w glasses
+npm run build -w glasses
+npm run pack -w glasses
+```
+
+Local config:
+
+```bash
+cp glasses/.env.example glasses/.env
+```
+
+Supported `glasses/.env` defaults:
+
+- `VITE_DEFAULT_RELAY_BASE_URL`
+- `VITE_DEFAULT_DEVICE_DISPLAY_NAME`
+- `VITE_DEFAULT_LEGACY_BRIDGE_TOKEN`
+- `VITE_DEFAULT_PROMPT_DRAFT`
+
+Use on device:
+
+1. Install `glasses/openclaw-g2.ehpk` in Even Hub.
+2. Open the app once to let it create its durable local `installId`.
+3. For the preferred v1 flow, enter the relay URL, pairing code, and device
+   display name, then pair.
+4. For legacy compatibility only, leave pairing empty and provide relay URL plus
+   legacy bridge token.
+5. Single-click sends the saved prompt over HTTP. Double-click cancels or
+   returns to idle. Foregrounding restores the session after WebView restarts.
 
 For a real Ubuntu/Debian staging host, the repo now also includes:
 

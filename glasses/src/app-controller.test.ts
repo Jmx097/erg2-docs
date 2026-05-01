@@ -19,6 +19,8 @@ describe("EvenHubAppController", () => {
       sendTurn: vi.fn()
     };
     const storage = createStorageBridge({
+      "openclaw.g2.configRelayBaseUrl": "https://relay.example.com",
+      "openclaw.g2.configDeviceDisplayName": "Jon's G2",
       "openclaw.g2.relayBaseUrl": "https://relay.example.com",
       "openclaw.g2.deviceId": "dev_123",
       "openclaw.g2.refreshToken": "rt_123",
@@ -34,6 +36,50 @@ describe("EvenHubAppController", () => {
     expect(controller.getSnapshot().status).toBe("connected");
   });
 
+  it("falls back to the legacy direct turn path when only relay url and token are stored", async () => {
+    const api = {
+      health: vi.fn(),
+      legacyHealth: vi.fn(async () => ({ ok: true, bridge: "g2-openclaw-bridge" })),
+      redeemPairing: vi.fn(),
+      registerDevice: vi.fn(),
+      refreshSession: vi.fn(),
+      sendTurn: vi.fn(),
+      sendLegacyTurn: vi.fn(async () => ({
+        reply: "alive",
+        model: "openclaw/default",
+        sessionKey: "g2:inst_123",
+        requestId: "turn_legacy"
+      }))
+    };
+    const controller = new EvenHubAppController(
+      createStorageBridge({
+        "openclaw.g2.configRelayBaseUrl": "https://relay.example.com",
+        "openclaw.g2.configDeviceDisplayName": "Jon's G2",
+        "openclaw.g2.legacyBridgeToken": "bridge-token",
+        "openclaw.g2.installId": "inst_123"
+      }),
+      api as any
+    );
+
+    await controller.boot();
+    await controller.sendPrompt();
+
+    expect(api.legacyHealth).toHaveBeenCalled();
+    expect(api.sendLegacyTurn).toHaveBeenCalledWith(
+      "https://relay.example.com",
+      "bridge-token",
+      expect.objectContaining({
+        installId: "inst_123"
+      }),
+      expect.any(AbortSignal)
+    );
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "connected",
+      transportMode: "legacy_v0",
+      lastReply: "alive"
+    });
+  });
+
   it("moves into repair_required when the backend revokes the device", async () => {
     const api = {
       health: vi.fn(async () => ({ ok: true, bridge: "openclaw-mobile-companion" })),
@@ -46,6 +92,8 @@ describe("EvenHubAppController", () => {
     };
     const controller = new EvenHubAppController(
       createStorageBridge({
+        "openclaw.g2.configRelayBaseUrl": "https://relay.example.com",
+        "openclaw.g2.configDeviceDisplayName": "Jon's G2",
         "openclaw.g2.relayBaseUrl": "https://relay.example.com",
         "openclaw.g2.deviceId": "dev_123",
         "openclaw.g2.refreshToken": "rt_123",
@@ -77,6 +125,8 @@ describe("EvenHubAppController", () => {
     };
     const controller = new EvenHubAppController(
       createStorageBridge({
+        "openclaw.g2.configRelayBaseUrl": "https://relay.example.com",
+        "openclaw.g2.configDeviceDisplayName": "Jon's G2",
         "openclaw.g2.relayBaseUrl": "https://relay.example.com",
         "openclaw.g2.deviceId": "dev_123",
         "openclaw.g2.refreshToken": "rt_123",

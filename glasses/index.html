@@ -30,8 +30,21 @@
             <label class="field">
               <span>Relay URL</span>
               <input id="relay-url" name="relay-url" type="url" autocomplete="url" placeholder="https://relay.example.com" />
-              <small class="hint">Use your VPS relay URL. No bearer token goes here.</small>
+              <small class="hint">Use your VPS relay URL. Pairing uses `/v1/*`. Legacy direct mode uses `/v0/turn`.</small>
               <small id="relay-url-error" class="error" hidden></small>
+            </label>
+
+            <label class="field">
+              <span>Legacy Bridge Token</span>
+              <input
+                id="legacy-bridge-token"
+                name="legacy-bridge-token"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Optional legacy token for /health and /v0/turn"
+              />
+              <small class="hint">Optional. Leave blank for the paired v1 flow. This stays only in Even Hub local storage.</small>
             </label>
 
             <label class="field">
@@ -75,6 +88,14 @@
             <div>
               <span class="meta-label">Status</span>
               <p id="status-detail" class="meta-value">Waiting for Even bridge...</p>
+            </div>
+            <div>
+              <span class="meta-label">Transport</span>
+              <p id="transport-mode" class="meta-value">none</p>
+            </div>
+            <div>
+              <span class="meta-label">Install ID</span>
+              <p id="install-id" class="meta-value">Loading...</p>
             </div>
             <div>
               <span class="meta-label">Access Expiry</span>
