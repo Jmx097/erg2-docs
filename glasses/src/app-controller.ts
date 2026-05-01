@@ -54,7 +54,7 @@ export class EvenHubAppController {
     statusDetail: "Waiting for Even bridge...",
     hudText: "OpenClaw G2\nWaiting for Even bridge...",
     lastReply: "",
-    relayBaseUrl: import.meta.env.VITE_DEFAULT_RELAY_BASE_URL?.trim() || "",
+    relayBaseUrl: import.meta.env.VITE_DEFAULT_RELAY_BASE_URL?.trim() || "https://glasses.plinkosolutions.com",
     legacyBridgeToken: import.meta.env.VITE_DEFAULT_LEGACY_BRIDGE_TOKEN?.trim() || "",
     installId: createInstallId(),
     pairingCode: "",
