@@ -2,9 +2,12 @@
   "package_id": "com.openclaw.g2client",
   "edition": "202601",
   "name": "OpenClaw G2",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.10",
+  "tagline": "Private OpenClaw companion for Even Realities G2.",
+  "description": "A thin Even Hub client that sends concise prompts to a paired OpenClaw relay and displays HUD-safe replies on Even Realities G2 glasses.",
+  "author": "Plinko Solutions",
   "entrypoint": "index.html",
   "permissions": [
     {
